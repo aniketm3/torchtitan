@@ -1,0 +1,60 @@
+[run ] aa_1p7b_none_lbs1_fsdp1_dp1
+[run ] aa_1p7b_none_lbs2_fsdp1_dp1
+[run ] aa_1p7b_none_lbs3_fsdp1_dp1
+[run ] aa_1p7b_none_lbs4_fsdp1_dp1
+[run ] aa_1p7b_none_lbs6_fsdp1_dp1
+[oom ] aa_1p7b_none_lbs6_fsdp1_dp1 -- stopping none sweep
+[run ] aa_1p7b_selective_lbs1_fsdp1_dp1
+[run ] aa_1p7b_selective_lbs2_fsdp1_dp1
+[run ] aa_1p7b_selective_lbs3_fsdp1_dp1
+[run ] aa_1p7b_selective_lbs4_fsdp1_dp1
+[run ] aa_1p7b_selective_lbs6_fsdp1_dp1
+[run ] aa_1p7b_selective_lbs8_fsdp1_dp1
+[run ] aa_1p7b_selective_lbs10_fsdp1_dp1
+[oom ] aa_1p7b_selective_lbs10_fsdp1_dp1 -- stopping selective sweep
+[run ] aa_1p7b_full_lbs1_fsdp1_dp1
+[run ] aa_1p7b_full_lbs2_fsdp1_dp1
+[run ] aa_1p7b_full_lbs3_fsdp1_dp1
+[run ] aa_1p7b_full_lbs4_fsdp1_dp1
+[run ] aa_1p7b_full_lbs6_fsdp1_dp1
+[run ] aa_1p7b_full_lbs8_fsdp1_dp1
+[run ] aa_1p7b_full_lbs10_fsdp1_dp1
+[run ] aa_1p7b_full_lbs12_fsdp1_dp1
+[run ] aa_1p7b_full_lbs16_fsdp1_dp1
+[run ] aa_1p7b_full_lbs20_fsdp1_dp1
+[run ] aa_1p7b_full_lbs24_fsdp1_dp1
+[run ] aa_1p7b_full_lbs32_fsdp1_dp1
+[run ] aa_1p7b_full_lbs40_fsdp1_dp1
+[run ] aa_1p7b_full_lbs48_fsdp1_dp1
+[run ] aa_1p7b_full_lbs64_fsdp1_dp1
+[oom ] aa_1p7b_full_lbs64_fsdp1_dp1 -- stopping full sweep
+AC          LBS  FSDP/DP  steps   TPS/GPU   MFU%   mem%  retries
+----------------------------------------------------------------
+full          1     1/1      40    17,719   23.5   39.9  
+full          2     1/1      40    22,164   29.5   41.2  
+full          3     1/1      40    23,952   31.8   41.9  
+full          4     1/1      40    24,753   32.9   43.3  
+full          6     1/1      40    27,596   36.7   43.9  
+full          8     1/1      40    28,012   37.2   46.4  
+full         10     1/1      40    28,014   37.2   48.5  
+full         12     1/1      40    29,019   38.6   50.8  
+full         16     1/1      40    29,659   39.4   55.5  
+full         20     1/1      40    30,226   40.2   59.6  
+full         24     1/1      40    30,569   40.6   64.3  
+full         32     1/1      40    29,394   39.1   73.0  
+full         40     1/1      40    29,625   39.4   81.6  
+full         48     1/1      40    29,800   39.6   90.6  
+none          1     1/1      40    19,364   25.7   49.0  
+none          2     1/1      40    24,431   32.5   58.8  
+none          3     1/1      40    26,326   35.0   69.3  
+none          4     1/1      40    28,934   38.4   79.8  
+selective     1     1/1      40    18,383   24.4   45.9  
+selective     2     1/1      40    24,504   32.6   52.8  
+selective     3     1/1      40    27,166   36.1   58.5  
+selective     4     1/1      40    27,413   36.4   65.3  
+selective     6     1/1      40    30,355   40.3   78.2  
+selective     8     1/1      40    31,151   41.4   91.0  
+
+Best: selective LBS=8 -> 31,151 TPS/GPU, 41.4% MFU, 91% mem
+Blog (16x B200): selective LBS=18 -> 28.4k TPS/GPU, 37.5% MFU, 92% mem
+Sweep done; waiting for sweep_logs/phase1_1p7b/COPIED before stopping pod 0g2crqztbhal4p

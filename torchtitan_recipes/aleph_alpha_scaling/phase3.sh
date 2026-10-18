@@ -1,5 +1,5 @@
 #!/usr/bin/bash
-# Phase 3 runs on one 8-GPU node. Each line: "<num_gpus> <config> <tag>".
+# Phase 3 runs on one multi-GPU node (4x H200: 8-GPU nodes were sold out). Each line: "<num_gpus> <config> <tag>".
 # Logs: $LOG_DIR/<config>__<tag>.log; outputs: outputs/phase3/<config>__<tag>/.
 # All runs log every 10 steps (_log10), the Phase 2b fix.
 #   ./phase3.sh dense   # Qwen3-1.7B: DDP vs FSDP vs HSDP, 1 -> 8 GPU scaling
@@ -13,26 +13,26 @@ mkdir -p "$LOG_DIR"
 
 DENSE="
 1 aa_1p7b_selective_lbs8_fsdp1_dp1_log10        base1gpu
-8 aa_1p7b_selective_lbs8_fsdp1_dp8_log10        ddp
-8 aa_1p7b_selective_lbs8_fsdp8_dp1_log10        fsdp
-8 aa_1p7b_selective_lbs8_fsdp4_dp2_log10        hsdp
-8 aa_1p7b_selective_lbs12_fsdp8_dp1_log10       fsdp
-8 aa_1p7b_selective_lbs16_fsdp8_dp1_log10       fsdp
-8 aa_1p7b_none_lbs8_fsdp8_dp1_log10             fsdp
-8 aa_1p7b_selective_lbs8_fsdp1_dp8_log10_prof   ddp
-8 aa_1p7b_selective_lbs8_fsdp8_dp1_log10_prof   fsdp
+4 aa_1p7b_selective_lbs8_fsdp1_dp4_log10        ddp
+4 aa_1p7b_selective_lbs8_fsdp4_dp1_log10        fsdp
+4 aa_1p7b_selective_lbs8_fsdp2_dp2_log10        hsdp
+4 aa_1p7b_selective_lbs12_fsdp4_dp1_log10       fsdp
+4 aa_1p7b_selective_lbs16_fsdp4_dp1_log10       fsdp
+4 aa_1p7b_none_lbs8_fsdp4_dp1_log10             fsdp
+4 aa_1p7b_selective_lbs8_fsdp1_dp4_log10_prof   ddp
+4 aa_1p7b_selective_lbs8_fsdp4_dp1_log10_prof   fsdp
 "
+# 30B-A3B on 4x H200: FSDP=4 leaves ~14 GiB/GPU for activations, so full AC
+# at small batch. LBS 1 vs the largest LBS that fits shows comm- vs compute-bound.
 MOE="
-8 aa_30b_a3b_full_lbs1_fsdp8_dp1_log10          fit
-8 aa_30b_a3b_full_lbs4_fsdp8_dp1_log10          sweep
-8 aa_30b_a3b_full_lbs8_fsdp8_dp1_log10          sweep
-8 aa_30b_a3b_default_lbs2_fsdp8_dp1_log10       sweep
-8 aa_30b_a3b_default_lbs4_fsdp8_dp1_log10       sweep
-8 aa_30b_a3b_selective_lbs2_fsdp8_dp1_log10     sweep
-8 aa_30b_a3b_selective_lbs4_fsdp8_dp1_log10     sweep
-8 aa_30b_a3b_default_lbs4_fsdp8_dp1_ep8_log10   ep
-8 aa_30b_a3b_default_lbs4_fsdp8_dp1_log10_prof  noep
-8 aa_30b_a3b_default_lbs4_fsdp8_dp1_ep8_log10_prof ep
+4 aa_30b_a3b_full_lbs1_fsdp4_dp1_log10           fit
+4 aa_30b_a3b_full_lbs2_fsdp4_dp1_log10           sweep
+4 aa_30b_a3b_full_lbs4_fsdp4_dp1_log10           sweep
+4 aa_30b_a3b_default_lbs1_fsdp4_dp1_log10        sweep
+4 aa_30b_a3b_full_lbs2_fsdp4_dp1_ep4_log10       ep
+4 aa_30b_a3b_full_lbs1_fsdp4_dp1_log10_prof      lbs1
+4 aa_30b_a3b_full_lbs2_fsdp4_dp1_log10_prof      noep
+4 aa_30b_a3b_full_lbs2_fsdp4_dp1_ep4_log10_prof  ep
 "
 case $SECTION in
     dense) RUNS=$DENSE ;;

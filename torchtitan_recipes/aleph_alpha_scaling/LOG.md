@@ -264,7 +264,7 @@ RMSNorm (77 ms) and eager elementwise ops (53 ms), by fusing or compiling them.
 A per-step `.item()` (logging, NaN checks, grad-norm prints) is a classic hidden
 sync. The fix is fewer syncs or async metrics, not a different parallelism.
 
-## Phase 3 plan (8 GPUs, one node), not run yet
+## Phase 3 plan (written for 8 GPUs; run on 4x H200, see results below)
 Script: `phase3.sh dense` then `phase3.sh moe`. Every run uses `_log10`.
 Hardware: **8x H200** (141 GB) recommended over 8x H100 (80 GB). For the 30B,
 FSDP=8 leaves ~10 GiB/GPU for activations on H100 (full-AC only, LBS 1-2) vs
@@ -317,3 +317,42 @@ Also expect lower MFU than dense: per-expert GEMMs are small (each expert sees
 ~256 x LBS tokens), and routing/permutation adds non-matmul work.
 
 Cost: ~55-60 min total (setup ~10, dense ~15, MoE ~30) x $42.32/hr = ~$40-45.
+
+## Phase 3 results (2026-10-18, pod `wvq3oo1yr5ljip`, 4x H200, ~1.9 h billed, ~$40)
+No 8-GPU pods were in stock, so every `8` above became `4` (`fsdp4_dp1`,
+`fsdp1_dp4`, `fsdp2_dp2`, `ep4`). About 80 min of the bill was idle GPUs: the
+"wait for dense, then start MoE" loop used `pgrep -f "phase3.sh dense"`, which
+matched its own command line, so MoE never started. Wait on a PID or a file.
+
+### Part A: dense, Qwen3-1.7B, selective LBS 8 unless noted (`sweep_logs/phase3_dense/`)
+| run | tok/s/GPU | MFU | mem | vs 1 GPU |
+|---|---|---|---|---|
+| 1 GPU | 43,579 | 57.9% | 51.5% | 100% |
+| DDP=4 | 40,953 | 54.4% | 51.5% | 94% |
+| FSDP=4 | 41,296 | 54.9% | 37.6% | 95% |
+| HSDP 2x2 | 41,869 | 55.6% | 42.6% | 96% |
+| FSDP=4, LBS 12 | 42,583 | 56.6% | 52.4% | 98% |
+| FSDP=4, LBS 16 | 41,934 | 55.7% | 67.1% | 96% |
+| FSDP=4, no AC LBS 8 | 42,683 | 56.7% | 54.0% | 98% |
+
+- H200 at 1 GPU (43.6k) is ~3% above the H100 (42.3k): same compute, faster memory.
+- Scaling inside one node costs 2-6%, a bit more than the 1-3% predicted.
+- DDP vs FSDP vs HSDP differ by ~2%, inside the +/-3% noise from Phase 2: no ranking.
+- FSDP memory matches the estimate: 51.5% - 3/4 x 25.6 GiB (13.7%) = 37.8%, measured 37.6%.
+  Batch 12/16 and no-AC also land within 1-2 points of Phase 1's per-sequence costs.
+- Spending the freed memory (LBS 12, or no AC) gets back to ~98% of 1-GPU speed.
+  Bigger is not always better: LBS 16 is slightly slower than 12.
+- Profiled runs are 2-3% slower (profiler overhead). Traces: `outputs/phase3/*_prof__*` (local only).
+
+### Part B: MoE, Qwen3-30B-A3B, FSDP=4, full AC (`sweep_logs/phase3_moe/`), stopped early
+| LBS | tok/s/GPU | MFU | mem |
+|---|---|---|---|
+| 1 | 4,575 | 12.9% | 88.3% |
+| 2 | 6,863 | 19.4% | 89.9% |
+
+- Static memory is ~16 B x 30.5B / 4 = 114 GiB/GPU (81%), so only ~10% is left for activations.
+- Doubling the batch gave +50%, far above noise: consistent with the "comm-bound at
+  small batch" prediction (FSDP gathers all 30.5B params each step for 3B of compute).
+- Stopped by choice to save money after LBS 2. Not run: LBS 4, default AC, EP vs no-EP,
+  profiles. EP and its no-EP comparison need `_nograph`: the all-to-all dispatcher syncs
+  with the CPU, which torchtitan's default CUDA graphs reject.

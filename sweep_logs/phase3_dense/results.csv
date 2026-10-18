@@ -1,0 +1,10 @@
+model,ac,lbs,fsdp,dp,variant,num_steps,num_avg_steps,tps,mfu,mem_pct,alloc_retries
+1p7b,none,8,4,1,log10__fsdp,5,3,42683.0,56.72,53.96,False
+1p7b,selective,8,1,1,log10__base1gpu,5,3,43579.0,57.91,51.52,False
+1p7b,selective,8,1,4,log10__ddp,5,3,40952.666666666664,54.416666666666664,51.52,False
+1p7b,selective,8,4,1,log10__fsdp,5,3,41296.0,54.873333333333335,37.61,False
+1p7b,selective,8,2,2,log10__hsdp,5,3,41868.666666666664,55.63333333333333,42.63,False
+1p7b,selective,8,1,4,log10_prof__ddp,5,3,39967.0,53.10999999999999,51.52,False
+1p7b,selective,8,4,1,log10_prof__fsdp,5,3,40377.333333333336,53.653333333333336,37.61,False
+1p7b,selective,12,4,1,log10__fsdp,5,3,42583.0,56.586666666666666,52.38,False
+1p7b,selective,16,4,1,log10__fsdp,5,3,41934.333333333336,55.72,67.14,False

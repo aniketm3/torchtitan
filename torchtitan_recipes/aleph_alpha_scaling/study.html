@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen3 H100 Throughput Study</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: one reading column (phases run top to bottom, as a sequence), data in mono, profiler-trace colours for GPU vs idle time. */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --ink: #16202b;
+  --muted: #566372;
+  --rule: #d6dde4;
+  --accent: #0e6b8c;
+  --idle: #c2620a;
+  --ok: #2f7d4f;
+  --s-none: #c2620a;
+  --s-sel: #0e6b8c;
+  --s-full: #6b4fbb;
+  --code-bg: #e9eef2;
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11171d; --surface: #182129; --ink: #e3e9ee; --muted: #93a1ae; --rule: #2b3843;
+    --accent: #4fb3d6; --idle: #f0954a; --ok: #6cc28f;
+    --s-none: #f0954a; --s-sel: #4fb3d6; --s-full: #a892f0; --code-bg: #1f2b35;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11171d; --surface: #182129; --ink: #e3e9ee; --muted: #93a1ae; --rule: #2b3843;
+  --accent: #4fb3d6; --idle: #f0954a; --ok: #6cc28f;
+  --s-none: #f0954a; --s-sel: #4fb3d6; --s-full: #a892f0; --code-bg: #1f2b35;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 400 16px/1.6 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 72px;
+}
+main { max-width: 800px; margin: 0 auto; display: grid; gap: 56px; }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 600; line-height: 1.2; text-wrap: balance; margin: 0; }
+h1 { font-size: 2.3rem; letter-spacing: -0.01em; }
+h2 { font-size: 1.6rem; }
+h3 { font-size: 1.15rem; margin-top: 8px; }
+p { margin: 0; max-width: 68ch; }
+a { color: var(--accent); }
+code, .mono { font-family: var(--f-mono); font-size: 0.88em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+.eyebrow { font: 500 0.78rem/1 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+section { display: grid; gap: 18px; min-width: 0; }
+.stack { display: grid; gap: 12px; min-width: 0; }
+.lede { color: var(--muted); font-size: 1.05rem; }
+header { display: grid; gap: 14px; }
+
+.result { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.result div { background: var(--surface); padding: 14px 16px; display: grid; gap: 2px; }
+.result .k { font: 500 0.72rem/1.3 var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.result .v { font: 600 1.45rem/1.2 var(--f-display); font-variant-numeric: tabular-nums; }
+.result .v small { font: 400 0.85rem var(--f-body); color: var(--muted); }
+.up { color: var(--ok); }
+
+.tablewrap { overflow-x: auto; min-width: 0; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font: 500 0.74rem/1.3 var(--f-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); background: var(--surface); }
+tr:last-child td { border-bottom: 0; }
+td.n, th.n { text-align: right; white-space: nowrap; }
+tr.hl td { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+
+.figure { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; display: grid; gap: 10px; min-width: 0; }
+.figure svg { width: 100%; height: auto; display: block; }
+.caption { font-size: 0.86rem; color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font: 400 0.82rem var(--f-mono); color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.sw.box { height: 10px; width: 10px; border-radius: 2px; }
+
+svg text { font-family: var(--f-mono); fill: var(--muted); font-size: 11px; }
+svg .axis { stroke: var(--rule); stroke-width: 1; }
+svg .grid { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 2 4; }
+svg .lbl { fill: var(--ink); }
+
+.callout { border-left: 3px solid var(--idle); background: var(--surface); padding: 14px 16px; border-radius: 0 6px 6px 0; display: grid; gap: 8px; }
+.callout.good { border-left-color: var(--ok); }
+.callout strong { font-family: var(--f-display); font-size: 1.05rem; font-weight: 600; }
+
+ol.read { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; counter-reset: r; }
+ol.read li { counter-increment: r; display: grid; grid-template-columns: 28px 1fr; gap: 4px 10px; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; min-width: 0; }
+ol.read li::before { content: counter(r); font: 600 1.1rem/1.4 var(--f-display); color: var(--accent); grid-row: span 2; }
+ol.read .path { font-family: var(--f-mono); font-size: 0.85rem; overflow-wrap: anywhere; color: var(--ink); font-weight: 500; }
+ol.read .why { color: var(--muted); font-size: 0.93rem; min-width: 0; }
+.skip { font-size: 0.9rem; color: var(--muted); }
+
+ol.steps { margin: 0; padding-left: 1.3em; display: grid; gap: 8px; max-width: 68ch; }
+ol.steps li::marker { font-family: var(--f-mono); color: var(--accent); }
+
+dl.qa { margin: 0; display: grid; gap: 14px; }
+dl.qa div { display: grid; gap: 4px; border-top: 1px solid var(--rule); padding-top: 12px; }
+dl.qa dt { font-family: var(--f-display); font-weight: 600; font-size: 1.05rem; }
+dl.qa dd { margin: 0; color: var(--ink); max-width: 68ch; }
+dl.qa dd .src { display: block; color: var(--muted); font-size: 0.86rem; margin-top: 4px; }
+
+footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--rule); padding-top: 16px; }
+@media (max-width: 520px) { h1 { font-size: 1.85rem; } h2 { font-size: 1.35rem; } }
+</style>
+
+<main>
+<header>
+  <span class="eyebrow">torchtitan · Qwen3-1.7B · 1× H100 SXM · seq 4096 · bf16</span>
+  <h1>Qwen3 H100 Throughput Study</h1>
+  <p class="lede">Reproducing the small-scale half of Aleph Alpha's <a href="https://aleph-alpha.com/en/blog/scaling-pre-training-in-practice-a-hierarchical-approach/">hierarchical sweep</a>: estimate the ceiling, sweep activation checkpointing × batch size, then profile to find what's left. Phases 0 to 2 on one H100, then Phase 3 on four H200s.</p>
+  <div class="result">
+    <div><span class="k">Best config</span><span class="v">selective · LBS 8</span></div>
+    <div><span class="k">Tokens/s/GPU</span><span class="v">42,346 <small>from 30,577</small></span></div>
+    <div><span class="k">MFU</span><span class="v">56.3% <small>from 40.6%</small></span></div>
+    <div><span class="k">GPU busy</span><span class="v">98.8% <small>from 71–81%</small></span></div>
+  </div>
+  <p class="caption">The jump came from one setting: logging every 10 steps instead of every step (Phase 2b). Same model, same batch, same machine.</p>
+</header>
+
+<section id="phase0">
+  <span class="eyebrow">Phase 0</span>
+  <h2>What "good" looks like</h2>
+  <p>Before running anything: count the FLOPs, divide by the GPU's peak, and get the ceiling.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Part</th><th class="n">Params</th><th>Note</th></tr></thead>
+    <tbody>
+      <tr><td>Attention q/k/v/o, per layer</td><td class="n">12.6 M</td><td>16 query heads, 8 KV heads (GQA), head dim 128</td></tr>
+      <tr><td>MLP gate/up/down, per layer</td><td class="n">37.7 M</td><td>SwiGLU, hidden 6144</td></tr>
+      <tr><td>28 layers</td><td class="n">1.409 B</td><td></td></tr>
+      <tr><td>Embedding = LM head</td><td class="n">0.311 B</td><td>one tied matrix, 151,936 × 2048</td></tr>
+      <tr class="hl"><td><strong>Total</strong></td><td class="n"><strong>1.72 B</strong></td><td>torchtitan reports 1,720,574,976</td></tr>
+    </tbody>
+  </table></div>
+  <div class="figure">
+    <svg id="flopbar" viewBox="0 0 760 74" role="img" aria-label="FLOPs per token split: layer matmuls 64 percent, LM head 14 percent, attention 21 percent"></svg>
+    <div class="caption"><strong>13.14 GFLOPs per token</strong> = 6 × 1.72 B matmul weights (2 FLOPs per weight in the forward pass, 4 in the backward) + 2.82 G for attention's own two matmuls, counting the full 4096 × 4096 score matrix by convention.</div>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>MFU</th><th class="n">Tokens/s</th><th class="n">Step time, LBS 8</th></tr></thead>
+    <tbody>
+      <tr><td>100% (impossible)</td><td class="n">75,259</td><td class="n">435 ms</td></tr>
+      <tr><td>50%</td><td class="n">37,630</td><td class="n">871 ms</td></tr>
+      <tr><td>40%</td><td class="n">30,104</td><td class="n">1,089 ms</td></tr>
+    </tbody>
+  </table></div>
+  <p>Peak = 989 TFLOPS dense BF16. Memory: fp32 weights (4 B) + fp32 grads (4 B) + Adam's two moments (8 B) = <strong>16 B/param = 25.6 GiB</strong> before a single activation.</p>
+</section>
+
+<section id="phase1">
+  <span class="eyebrow">Phase 1</span>
+  <h2>The sweep: checkpointing × batch size</h2>
+  <p>For each AC mode, raise the local batch size (LBS) until out of memory. 40 steps per run, mean of steps 11–40.</p>
+  <div class="figure">
+    <div class="legend">
+      <span><i class="sw" style="background:var(--s-none)"></i>none</span>
+      <span><i class="sw" style="background:var(--s-sel)"></i>selective</span>
+      <span><i class="sw" style="background:var(--s-full)"></i>full</span>
+      <span><i class="sw box" style="background:var(--ok)"></i>selective LBS 8 after the Phase 2b fix</span>
+    </div>
+    <svg id="sweep" viewBox="0 0 760 400" role="img" aria-label="Tokens per second per GPU against peak reserved memory percent, one line per checkpointing mode"></svg>
+    <div class="caption">Labels on points are LBS. All Phase 1 runs logged every step, so every point sits below its true value. The green square shows how much.</div>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>AC mode</th><th class="n">Max LBS (OOM at)</th><th class="n">Best tok/s</th><th class="n">MFU</th><th class="n">Memory</th><th class="n">Memory per sequence</th></tr></thead>
+    <tbody>
+      <tr><td>none</td><td class="n">4 (6)</td><td class="n">28,934</td><td class="n">38.4%</td><td class="n">80%</td><td class="n">8.3 GiB</td></tr>
+      <tr class="hl"><td>selective</td><td class="n">8 (10)</td><td class="n">31,151</td><td class="n">41.4%</td><td class="n">91%</td><td class="n">5.0 GiB</td></tr>
+      <tr><td>full</td><td class="n">48 (64)</td><td class="n">30,569 <span class="caption">@24</span></td><td class="n">40.6%</td><td class="n">64%</td><td class="n">0.85 GiB</td></tr>
+    </tbody>
+  </table></div>
+  <div class="stack">
+    <h3>What it showed</h3>
+    <p><strong>Memory is predictable.</strong> Every mode has the same ~31 GiB fixed cost (25.6 GiB of weights and optimizer state, plus ~5 GiB of CUDA context and workspaces), leaving ~48 GiB for activations. Max LBS ≈ 48 GiB ÷ memory per sequence: 5.8, 9.6 and 56, against 4, 8 and 48 measured.</p>
+    <p><strong>Bigger batches are faster, until the GPU is saturated.</strong> 18–19k tok/s at LBS 1 rises to 29–31k. Full-AC flattens past LBS 16 and doesn't improve as it fills memory.</p>
+    <p><strong>Full-AC looked only ~10% slower than none at the same LBS,</strong> although it redoes 29% more matmul work. That puzzle sent us to the profiler.</p>
+  </div>
+</section>
+
+<section id="phase2">
+  <span class="eyebrow">Phase 2</span>
+  <h2>Diagnosis: what the knobs don't show</h2>
+  <p>Ablations change one thing from selective LBS 8. Profiles capture two steps of the best, worst, and full-AC configs.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Change</th><th class="n">Tok/s</th><th class="n">vs base</th><th class="n">Memory</th><th>Reading</th></tr></thead>
+    <tbody>
+      <tr><td>none (3 repeats)</td><td class="n">31.9k–33.8k</td><td class="n">±3%</td><td class="n">91%</td><td>Run-to-run noise. Under 5% is not a difference.</td></tr>
+      <tr><td>compile off</td><td class="n">24.6k–25.0k</td><td class="n">−24%</td><td class="n">98%</td><td>Fused loss/SwiGLU/RoPE kernels matter. Eager also stores more intermediates.</td></tr>
+      <tr><td>LBS 9</td><td class="n">31.1k</td><td class="n">−5%</td><td class="n">97%</td><td>Slower with more tokens per step. No allocator retries logged.</td></tr>
+      <tr><td>full-AC</td><td class="n">28.7k</td><td class="n">−12%</td><td class="n">46%</td><td>Recompute cost, still diluted by idle time.</td></tr>
+      <tr><td>data-wait share</td><td class="n" colspan="2">1–4% of step</td><td class="n"></td><td>Dataloader <code>next()</code> is not the bottleneck.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>The trace: one step, before and after</h3>
+  <div class="figure">
+    <div class="legend">
+      <span><i class="sw box" style="background:var(--accent)"></i>GPU kernels</span>
+      <span><i class="sw box" style="background:var(--idle)"></i>GPU idle</span>
+      <span><i class="sw box" style="background:var(--muted)"></i>CPU work</span>
+    </div>
+    <svg id="timeline" viewBox="0 0 760 210" role="img" aria-label="Timeline of one step before and after the fix: before, the GPU idles about 150 ms at the start of each step while the CPU stages the batch; after, kernels run back to back"></svg>
+    <div class="caption">Widths are to scale (ms). Before: step 19 of the <code>prof__best</code> trace (GPU step 902 ms, busy 80.8%; step 18 was 1,026 ms at 70.7%). After: step 19 of <code>log10_prof__fixed</code> (748 ms, busy 98.8%, 6 ms of gaps).</div>
+  </div>
+  <div class="callout">
+    <strong>Root cause: a sync on every step</strong>
+    <p>Logging calls <code>loss.item()</code> and <code>grad_norm.item()</code> (<code>torchtitan/trainer.py</code> ~450–462). To return a Python number, the CPU must wait for the GPU to finish all queued work: a 684 ms <code>cudaStreamSynchronize</code> in the trace. The GPU's queue is then empty. It sits idle while the CPU stages the next batch (<code>aten::view</code> 56 ms, host-to-device copy 43 ms, <code>aten::reshape</code> 42 ms), roughly 150 ms per step. With <code>log_freq=1</code> this happened every step.</p>
+  </div>
+  <div class="callout good">
+    <strong>Fix: log every 10 steps (Phase 2b, same machine)</strong>
+    <p>Nine of ten steps now return at <code>trainer.py</code> ~410 before any <code>.item()</code>, so the CPU runs ahead and stages batch N+1 while the GPU computes step N. Result: 30,577 → 42,346 tok/s (+38%), step 1.07 s → 0.77 s, GPU busy 98.8%. With idle time gone, full-AC is −15% at LBS 8 and −12% at LBS 24: <strong>selective wins, outside noise.</strong></p>
+  </div>
+
+  <h3>Where the GPU's time goes now (735 ms of kernels)</h3>
+  <div class="figure">
+    <svg id="kernels" viewBox="0 0 760 236" role="img" aria-label="Kernel time by category after the fix"></svg>
+    <div class="caption">From <code>trace_summary.py</code>. Matmuls run at about 777 TFLOPS while active (79% of peak), so they're already efficient. The remaining headroom is the ~41% that isn't matmul, starting with RMSNorm (one unfused eager kernel, forward plus backward).</div>
+  </div>
+  <p><strong>Why small batches are inefficient (the "worst" trace, LBS 1):</strong> the optimizer costs 23.5 ms per step whatever the batch size. At LBS 1 that's 15% of GPU time; at LBS 8, 3%. Matmuls are only 38% of kernel time at LBS 1. With few tokens per step, fixed per-step costs dominate.</p>
+</section>
+
+<section id="phase3">
+  <span class="eyebrow">Phase 3 · 4× H200 · dense done, MoE cut short</span>
+  <h2>Many GPUs: who holds what, and what moves</h2>
+  <p>One GPU only had to be kept busy. With several, each step also has to move data between GPUs, and the question becomes whether that movement hides behind compute or makes the GPUs wait. 8-GPU machines were sold out, so this ran on one 4× H200 node. All four GPUs share NVLink, about 450 GB/s each way.</p>
+
+  <div class="tablewrap"><table>
+    <thead><tr><th>Strategy</th><th>Each GPU holds</th><th>What moves each step</th><th>Used here</th></tr></thead>
+    <tbody>
+      <tr><td><strong>DDP</strong> (data parallel)</td><td>Full copy of weights, grads, optimizer</td><td>Gradients averaged once (all-reduce), overlapped with backward</td><td>1.7B</td></tr>
+      <tr><td><strong>FSDP</strong> (sharded data parallel)</td><td>1/N of weights, grads, optimizer</td><td>Weights gathered layer by layer (all-gather) in forward and backward; grads reduce-scattered</td><td>1.7B and 30B</td></tr>
+      <tr><td><strong>HSDP</strong></td><td>1/k of everything, within groups of k</td><td>FSDP inside a group, all-reduce across groups. Built for shard-in-node, replicate-across-nodes.</td><td>1.7B (2×2)</td></tr>
+      <tr><td><strong>EP</strong> (expert parallel)</td><td>Whole experts: 32 of 128 each</td><td>Tokens, not weights: each token is sent to its experts' GPU and back (all-to-all)</td><td>30B</td></tr>
+      <tr><td>TP / PP</td><td>Slices of each matmul / a range of layers</td><td>Activations every layer / between stages</td><td>Not used. The blog didn't either; they matter when a layer or the model's depth doesn't fit, usually at multi-node scale.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Part A: Qwen3-1.7B on 1 vs 4 GPUs</h3>
+  <p>Same per-GPU setup as the best single-GPU run (selective, LBS 8, log every 10). A 1-GPU run on the same node is the baseline. <strong>Scaling efficiency</strong> = tok/s/GPU on 4 GPUs ÷ tok/s on 1.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Prediction</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td>DDP and FSDP both ≥ 97% scaling efficiency</td><td>Either moves ~10 GB per step: 23 ms at NVLink speed vs ~740 ms of compute, and on a separate stream that overlaps compute.</td></tr>
+      <tr><td>FSDP ≈ DDP in speed, much less memory</td><td>FSDP spreads the 25.6 GiB of weights, grads and Adam state 4 ways (6.4 GiB each).</td></tr>
+      <tr><td>HSDP ≈ FSDP</td><td>Within one machine every link is fast, so there's no slow tier for HSDP to avoid.</td></tr>
+      <tr><td>H200 baseline above the H100's 42.3k</td><td>Same compute peak, but ~1.4× the memory bandwidth, which speeds up the memory-bound 40% (norms, elementwise ops). Compare within this node only.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Part A results</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Run (selective, LBS 8 unless noted)</th><th class="n">Tok/s/GPU</th><th class="n">MFU</th><th class="n">Memory</th><th class="n">vs 1 GPU</th></tr></thead>
+    <tbody>
+      <tr><td>1 GPU</td><td class="n">43,579</td><td class="n">57.9%</td><td class="n">51.5%</td><td class="n">100%</td></tr>
+      <tr><td>DDP = 4</td><td class="n">40,953</td><td class="n">54.4%</td><td class="n">51.5%</td><td class="n">94%</td></tr>
+      <tr><td>FSDP = 4</td><td class="n">41,296</td><td class="n">54.9%</td><td class="n">37.6%</td><td class="n">95%</td></tr>
+      <tr><td>HSDP 2×2</td><td class="n">41,869</td><td class="n">55.6%</td><td class="n">42.6%</td><td class="n">96%</td></tr>
+      <tr class="hl"><td>FSDP = 4, LBS 12</td><td class="n">42,583</td><td class="n">56.6%</td><td class="n">52.4%</td><td class="n">98%</td></tr>
+      <tr><td>FSDP = 4, LBS 16</td><td class="n">41,934</td><td class="n">55.7%</td><td class="n">67.1%</td><td class="n">96%</td></tr>
+      <tr><td>FSDP = 4, no AC</td><td class="n">42,683</td><td class="n">56.7%</td><td class="n">54.0%</td><td class="n">98%</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Prediction</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>≥ 97% scaling efficiency</td><td><strong>Close, not quite.</strong> 94–96% at the same batch. Spending FSDP's freed memory (LBS 12, or no AC) gets back to 98%.</td></tr>
+      <tr><td>FSDP ≈ DDP in speed, much less memory</td><td><strong>Held.</strong> Speeds within 1%. Memory 37.6% vs 51.5%: predicted 51.5% − ¾ × 25.6 GiB = 37.8%.</td></tr>
+      <tr><td>HSDP ≈ FSDP</td><td><strong>Held.</strong> DDP, FSDP and HSDP span ~2%, inside the ±3% noise. These runs can't rank them.</td></tr>
+      <tr><td>H200 above H100</td><td><strong>Held, barely.</strong> 43.6k vs 42.3k (+3%).</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout">
+    <strong>What the traces show (rank 0, step 19)</strong>
+    <p>FSDP: the compute stream is 99.5% busy over a 747 ms step. Meanwhile, on separate streams, <code>ncclDevKernel_AllGather</code> (~100 ms per step) and <code>ReduceScatter</code> (~125 ms per step) run alongside it. That's ~30% of the step spent communicating, almost all of it hidden. DDP shows the same picture with one kernel, <code>AllReduce</code>, at ~200 ms per step. The kernel names end in <code>f32</code>: gradients are averaged in fp32, so twice the bytes of bf16. The 2–6% that is lost is mostly compute and communication sharing the GPU, not idle time.</p>
+  </div>
+
+  <h3>Part B: Qwen3-30B-A3B, a mixture of experts</h3>
+  <p>30.5 B parameters, but each token only uses 3.0 B: 8 of 128 experts per layer, plus attention. 29 B of the parameters are experts. Compute scales with the 3 B active; memory and FSDP traffic scale with all 30.5 B. Under FSDP=4, each GPU holds 113.7 GiB of the 139.8 GiB just for weights, grads and optimizer, so only full AC at a small batch fits.</p>
+  <div class="figure">
+    <svg id="moecomm" viewBox="0 0 760 178" role="img" aria-label="Per-step compute time at LBS 1, 2, 4 versus FSDP communication time of 0.41 seconds and EP communication of 0.11 seconds"></svg>
+    <div class="caption">Per step, estimated. Compute at 40% MFU (27.9 GFLOPs/token). FSDP moves 183 GB (0.41 s); EP moves ~48 GB at LBS 2 (0.11 s). When communication outlasts compute, overlap can't hide it and the GPU waits.</div>
+  </div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Prediction</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td><strong>At LBS 1 the MoE is communication-bound</strong>; tok/s/GPU climbs steeply from LBS 1 to 4</td><td>FSDP gathers all 30.5 B params every step whatever the batch size, but compute grows with the batch. At LBS 1: 0.41 s of transfers vs 0.29 s of compute.</td></tr>
+      <tr><td>EP=4 beats FSDP-only at the same batch</td><td>Expert weights stay put; only tokens travel. ~4× less data at LBS 2.</td></tr>
+      <tr><td>MoE MFU well below dense (20–35%)</td><td>Small per-expert matmuls (each expert sees about 256 × LBS tokens), plus routing and token-shuffling work that does no FLOPs.</td></tr>
+      <tr><td>EP traces show waiting inside all-to-all</td><td>If the router sends more tokens to one GPU's experts, the others wait for it: load imbalance, a classic MoE problem.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Part B results (stopped after two runs to save cost)</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>FSDP = 4, full AC</th><th class="n">Tok/s/GPU</th><th class="n">MFU</th><th class="n">Memory</th></tr></thead>
+    <tbody>
+      <tr><td>LBS 1</td><td class="n">4,575</td><td class="n">12.9%</td><td class="n">88.3%</td></tr>
+      <tr class="hl"><td>LBS 2</td><td class="n">6,863</td><td class="n">19.4%</td><td class="n">89.9%</td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>The first prediction held:</strong> doubling the batch gave +50%, far outside noise. Dense gained a few percent from the same change. The MoE does the same FSDP traffic whatever the batch size, so more tokens per step amortize it. MFU (12.9–19.4%) is a third of dense, below even the 20–35% predicted. The other predictions (EP vs FSDP, all-to-all waiting) are untested. EP and its comparison run need CUDA graphs off (<code>_nograph</code>): the all-to-all dispatcher syncs with the CPU, and torchtitan's graph check rejects that.</p>
+
+  <h3>What to look for in the multi-GPU traces</h3>
+  <ol class="steps">
+    <li>A second busy GPU stream full of <code>ncclDevKernel_AllGather</code>, <code>ReduceScatter</code>, <code>AllReduce</code>, or <code>SendRecv</code> (all-to-all) kernels.</li>
+    <li><strong>Overlapped</strong> communication: NCCL kernels run while the compute stream is also busy. That's free.</li>
+    <li><strong>Exposed</strong> communication: the compute stream is empty while an NCCL kernel runs. That time is lost; expect it in the MoE LBS 1 trace.</li>
+    <li>FSDP prefetch: the all-gather for layer N+1 starts while layer N computes.</li>
+  </ol>
+  <p class="caption">This is the "compute-bound vs communication-bound" check the blog ran at each scale.</p>
+</section>
+
+<section id="code">
+  <span class="eyebrow">Read next</span>
+  <h2>Code to pull up, in order</h2>
+  <p><code>trainer.py</code> shows how a step runs. <code>recipes.py</code> is the only place each run's settings live. You need both to explain any number.</p>
+  <ol class="read">
+    <li><span class="path">torchtitan_recipes/aleph_alpha_scaling/recipes.py</span><span class="why"><code>build_sweep_config</code>: every knob a run sets (AC policy, LBS as tokens per microbatch, compile regions, log_freq, profiler). <code>__getattr__</code> at the bottom turns a name like <code>aa_1p7b_selective_lbs8_fsdp1_dp1_log10</code> into a config.</span></li>
+    <li><span class="path">torchtitan/trainer.py · lines ~300–465</span><span class="why"><code>train_step</code>: fetch batch → <code>forward_backward</code> → <code>optim_step</code> → logging. Line ~410 is the early return; ~450 and ~462 are the <code>.item()</code> syncs.</span></li>
+    <li><span class="path">torchtitan/distributed/activation_remat.py · lines ~25–210</span><span class="why">What the AC policies mean: "save regions" vs recompute. Selective here is <code>save_regions=["*"]</code>. Everything outside a model-declared region (norms, activations, RoPE) gets recomputed.</span></li>
+    <li><span class="path">torchtitan/observability/metrics.py · lines ~75–100 and ~540–570</span><span class="why">How tps, MFU and memory % are computed, and where the allocator-retry warning comes from.</span></li>
+    <li><span class="path">torchtitan/models/qwen3/model.py · line ~115</span><span class="why">FLOPs per token: <code>6 * active_params + attention_flops</code>. The attention formula is in <code>models/common/flops.py:20</code>.</span></li>
+  </ol>
+  <p class="skip">Skip: the <code>.sh</code> scripts and <code>summarize.py</code> / <code>tb_summary.py</code>, which are plumbing. Optional: <code>trace_summary.py</code>, to see how "GPU busy %" is computed from a trace.</p>
+</section>
+
+<section id="traces">
+  <span class="eyebrow">Read next</span>
+  <h2>Where to look in the traces</h2>
+  <ol class="steps">
+    <li>Open <a href="https://ui.perfetto.dev">ui.perfetto.dev</a> → Open trace file → <code>outputs/phase2/aa_1p7b_selective_lbs8_fsdp1_dp1_prof__best/profiling/traces/iteration_20/rank0_trace.json.gz</code>.</li>
+    <li>Find two rows: the python <strong>CPU thread</strong> and <strong>GPU stream 7</strong>. W/S zoom, A/D pan, click a slice for details.</li>
+    <li>On stream 7, find where <code>ProfilerStep#19</code> starts. There's a ~150 ms empty stretch before the dense block of kernels.</li>
+    <li>Look straight up at the CPU row in that stretch: <code>aten::view</code>, <code>aten::to</code>, <code>aten::reshape</code> taking tens of ms.</li>
+    <li>Scroll left into <code>ProfilerStep#18</code> on the CPU row: a long <code>aten::item</code> → <code>cudaStreamSynchronize</code>. That's the sync.</li>
+    <li>Open <code>outputs/phase2b/…_log10_prof__fixed/…/rank0_trace.json.gz</code>: kernels run edge to edge.</li>
+    <li>Compare with <code>…_prof__worst</code> (LBS 1): short kernels and a fat optimizer block.</li>
+    <li>Memory: drag <code>…/prof__best/profiling/memory_snapshot/step_000000000020/000000_step_20.pickle</code> into <a href="https://pytorch.org/memory_viz">pytorch.org/memory_viz</a>. Find the flat ~31 GB base of weights and optimizer state, and activations rising through forward and falling through backward.</li>
+  </ol>
+</section>
+
+<section id="explain">
+  <span class="eyebrow">Self-check</span>
+  <h2>What you should be able to explain</h2>
+  <dl class="qa">
+    <div><dt>How are tokens/s, MFU and memory % measured, and why optimize tokens/s?</dt>
+      <dd>tokens/s/GPU = tokens since the last log ÷ elapsed time ÷ GPUs. MFU = tokens/s × FLOPs per token (13.14 G) ÷ peak (989 T). Memory = peak <em>reserved</em> ÷ total, because reserved is what decides OOM. Tokens/s directly sets time-to-train for a fixed token budget. MFU depends on how you count FLOPs (causal attention, recompute), so it's harder to compare across teams.<span class="src">metrics.py ~540–570</span></dd></div>
+    <div><dt>Where does GPU memory go, and why does it cap batch size?</dt>
+      <dd>A fixed 16 B/param (fp32 weights, grads and two Adam moments) = 25.6 GiB, plus ~5 GiB of runtime overhead. Activations grow linearly with LBS: 8.3 / 5.0 / 0.85 GiB per sequence for none / selective / full. Max LBS ≈ free memory ÷ per-sequence cost.<span class="src">Phase 1 table; memory_viz snapshot</span></dd></div>
+    <div><dt>What's the activation checkpointing trade-off, and why does selective usually win?</dt>
+      <dd>AC stores less during forward and recomputes the rest during backward: memory for compute. Selective recomputes only cheap elementwise ops (norms, SiLU, RoPE), cutting ~40% of activation memory for almost no extra matmul work. Full cuts ~90% but reruns every block's forward pass (+29% matmul time here), and the bigger batches it allows didn't win that back: −12 to −15% after the fix.<span class="src">activation_remat.py; Phase 2b table</span></dd></div>
+    <div><dt>Why does throughput peak near full memory, and what happens past it?</dt>
+      <dd>Bigger batches amortize fixed per-step costs (optimizer, launches) and give the GPU larger, more efficient kernels. For a mode still climbing when memory runs out, the best point is the largest batch that fits (selective LBS 8, 91%). Past ~95%, LBS 9 at 97% ran 5% slower despite 12.5% more tokens per step, consistent with the blog. We saw no logged allocator retries, so the mechanism is unconfirmed.<span class="src">Phase 1 curve; Phase 2 LBS 9 run</span></dd></div>
+    <div><dt>How do you read a trace and show a run is compute-bound?</dt>
+      <dd>Measure GPU busy % (the share of the step with a kernel running) and look at what fills the gaps. Idle stretches with the CPU busy above them mean host-bound: a sync, launch overhead, or data staging. Compute-bound means ~99% busy with matmuls dominating kernel time and running near peak. After the fix: 98.8% busy, matmuls 59% of kernel time at ~79% of peak.<span class="src">trace_summary.py; Perfetto steps above</span></dd></div>
+  </dl>
+</section>
+
+<footer>
+  Source: <code>torchtitan_recipes/aleph_alpha_scaling/LOG.md</code> and <code>sweep_logs/</code> on branch <code>aleph-alpha-scaling</code> (github.com/aniketm3/torchtitan). Runs 2026-10-17 and 2026-10-18 on RunPod H100 SXM pods. Phase 1 and Phase 2 used different machines, so compare within a phase.
+</footer>
+</main>
+
+<script>
+(function () {
+  var NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, parent, text) {
+    var n = document.createElementNS(NS, tag);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+
+  // FLOPs split bar
+  (function () {
+    var svg = document.getElementById("flopbar");
+    var parts = [
+      { name: "layer matmuls 8.45 G", v: 8.45, c: "var(--accent)" },
+      { name: "LM head 1.87 G", v: 1.866, c: "var(--s-full)" },
+      { name: "attention 2.82 G", v: 2.82, c: "var(--idle)" }
+    ];
+    var total = 13.14, x = 0, W = 760;
+    parts.forEach(function (p) {
+      var w = p.v / total * W;
+      el("rect", { x: x, y: 8, width: w - 2, height: 26, rx: 3, style: "fill:" + p.c }, svg);
+      el("text", { x: x + 6, y: 54, "class": "lbl" }, svg, p.name);
+      el("text", { x: x + 6, y: 68 }, svg, Math.round(p.v / total * 100) + "%");
+      x += w;
+    });
+  })();
+
+  // Phase 1 sweep chart
+  (function () {
+    var svg = document.getElementById("sweep");
+    var M = { l: 56, r: 16, t: 14, b: 40 }, W = 760, H = 400;
+    var x0 = 35, x1 = 100, y0 = 15000, y1 = 45000;
+    function X(v) { return M.l + (v - x0) / (x1 - x0) * (W - M.l - M.r); }
+    function Y(v) { return H - M.b - (v - y0) / (y1 - y0) * (H - M.t - M.b); }
+    for (var t = 15000; t <= 45000; t += 5000) {
+      el("line", { x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t), "class": "grid" }, svg);
+      el("text", { x: M.l - 8, y: Y(t) + 4, "text-anchor": "end" }, svg, (t / 1000) + "k");
+    }
+    for (var m = 40; m <= 100; m += 10) {
+      el("line", { x1: X(m), x2: X(m), y1: H - M.b, y2: H - M.b + 5, "class": "axis" }, svg);
+      el("text", { x: X(m), y: H - M.b + 18, "text-anchor": "middle" }, svg, m + "%");
+    }
+    el("line", { x1: M.l, x2: W - M.r, y1: H - M.b, y2: H - M.b, "class": "axis" }, svg);
+    el("text", { x: (M.l + W - M.r) / 2, y: H - 4, "text-anchor": "middle" }, svg, "peak reserved memory");
+    el("text", { x: 12, y: (M.t + H - M.b) / 2, "text-anchor": "middle", transform: "rotate(-90 12 " + (M.t + H - M.b) / 2 + ")" }, svg, "tokens/s/GPU");
+    var series = [
+      { c: "var(--s-none)", pts: [[49.04,19364,1],[58.81,24431,2],[69.32,26326,3],[79.85,28934,4]] },
+      { c: "var(--s-sel)", pts: [[45.85,18383,1],[52.82,24504,2],[58.52,27166,3],[65.34,27413,4],[78.18,30355,6],[90.96,31151,8]] },
+      { c: "var(--s-full)", pts: [[39.89,17719,1],[41.18,22164,2],[41.87,23952,3],[43.33,24753,4],[43.94,27596,6],[46.36,28012,8],[48.54,28014,10],[50.8,29019,12],[55.47,29659,16],[59.59,30226,20],[64.33,30569,24],[73.02,29394,32],[81.61,29625,40],[90.62,29800,48]] }
+    ];
+    series.forEach(function (s) {
+      el("polyline", { points: s.pts.map(function (p) { return X(p[0]) + "," + Y(p[1]); }).join(" "), fill: "none", style: "stroke:" + s.c, "stroke-width": 2 }, svg);
+      s.pts.forEach(function (p, i) {
+        el("circle", { cx: X(p[0]), cy: Y(p[1]), r: 3.5, style: "fill:" + s.c }, svg);
+        var dense = s.c === "var(--s-full)" && i > 0 && i < 6 && i % 2 === 1;
+        if (!dense) el("text", { x: X(p[0]) + 5, y: Y(p[1]) - 7, "font-size": 10 }, svg, p[2]);
+      });
+    });
+    var fx = X(91.0), fy = Y(42346);
+    el("line", { x1: X(90.96), y1: Y(31151) - 6, x2: fx, y2: fy + 9, style: "stroke:var(--ok)", "stroke-width": 1.5, "stroke-dasharray": "3 3" }, svg);
+    el("rect", { x: fx - 6, y: fy - 6, width: 12, height: 12, rx: 2, style: "fill:var(--ok)" }, svg);
+    el("text", { x: fx - 12, y: fy + 4, "text-anchor": "end", "class": "lbl" }, svg, "42.3k after fix (+38%)");
+  })();
+
+  // Before/after timeline
+  (function () {
+    var svg = document.getElementById("timeline");
+    var L = 92, W = 760, S = (W - L - 8) / 1050; // px per ms, 1050 ms span
+    function bar(y, x0, x1, color, label, h) {
+      h = h || 22;
+      el("rect", { x: L + x0 * S, y: y, width: Math.max(1, (x1 - x0) * S - 1), height: h, rx: 2, style: "fill:" + color }, svg);
+      if (label) el("text", { x: L + x0 * S + 5, y: y + h / 2 + 4, style: "fill:var(--bg)", "font-size": 10.5 }, svg, label);
+    }
+    el("text", { x: 0, y: 14, "class": "lbl" }, svg, "BEFORE: log every step");
+    el("text", { x: 0, y: 42 }, svg, "CPU");
+    el("text", { x: 0, y: 72 }, svg, "GPU");
+    bar(28, 0, 150, "var(--muted)", "stage batch ~150 ms");
+    bar(28, 150, 330, "var(--muted)", "queue kernels");
+    bar(28, 330, 902, "color-mix(in srgb, var(--muted) 45%, transparent)", "wait in .item() sync until GPU drains");
+    bar(58, 0, 151, "var(--idle)", "idle 151 ms");
+    bar(58, 151, 902, "var(--accent)", "step kernels");
+    el("text", { x: L + 902 * S + 4, y: 74 }, svg, "902");
+    el("text", { x: 0, y: 116, "class": "lbl" }, svg, "AFTER: log every 10");
+    el("text", { x: 0, y: 144 }, svg, "CPU");
+    el("text", { x: 0, y: 174 }, svg, "GPU");
+    bar(130, 0, 150, "var(--muted)", "stage batch N+1");
+    bar(130, 150, 330, "var(--muted)", "queue kernels, run ahead");
+    bar(160, 0, 748, "var(--accent)", "step kernels, back to back");
+    el("text", { x: L + 748 * S + 4, y: 176 }, svg, "748 ms");
+    for (var t = 0; t <= 1000; t += 250) {
+      el("line", { x1: L + t * S, x2: L + t * S, y1: 190, y2: 195, "class": "axis" }, svg);
+      el("text", { x: L + t * S, y: 207, "text-anchor": "middle", "font-size": 10 }, svg, t + " ms");
+    }
+  })();
+
+  // MoE compute vs communication
+  (function () {
+    var svg = document.getElementById("moecomm");
+    var L = 150, W = 760, max = 1.25, row = 30;
+    var data = [
+      ["compute, LBS 1", 0.29, "var(--accent)"],
+      ["compute, LBS 2", 0.58, "var(--accent)"],
+      ["compute, LBS 4", 1.16, "var(--accent)"],
+      ["FSDP transfers", 0.41, "var(--idle)"],
+      ["EP transfers, LBS 2", 0.11, "var(--ok)"]
+    ];
+    data.forEach(function (d, i) {
+      var y = 6 + i * row, w = d[1] / max * (W - L - 70);
+      el("text", { x: L - 10, y: y + 15, "text-anchor": "end", "class": "lbl" }, svg, d[0]);
+      el("rect", { x: L, y: y + 3, width: w, height: 17, rx: 2, style: "fill:" + d[2] }, svg);
+      el("text", { x: L + w + 8, y: y + 15 }, svg, d[1].toFixed(2) + " s");
+    });
+    var fx = L + 0.41 / max * (W - L - 70);
+    el("line", { x1: fx, x2: fx, y1: 4, y2: 6 + 5 * row - 4, style: "stroke:var(--idle)", "stroke-dasharray": "3 3" }, svg);
+  })();
+
+  // Kernel categories
+  (function () {
+    var svg = document.getElementById("kernels");
+    var data = [["matmul", 434.7, "var(--accent)"], ["RMSNorm", 76.8, "var(--s-full)"], ["compiled Triton", 68.4, "var(--s-full)"], ["eager elementwise", 53.3, "var(--s-full)"], ["attention", 50.5, "var(--s-full)"], ["other", 31.1, "var(--muted)"], ["optimizer", 23.5, "var(--muted)"]];
+    var L = 150, W = 760, max = 450, row = 32;
+    data.forEach(function (d, i) {
+      var y = 6 + i * row, w = d[1] / max * (W - L - 110);
+      el("text", { x: L - 10, y: y + 15, "text-anchor": "end", "class": "lbl" }, svg, d[0]);
+      el("rect", { x: L, y: y + 2, width: w, height: 18, rx: 2, style: "fill:" + d[2] }, svg);
+      el("text", { x: L + w + 8, y: y + 15 }, svg, d[1].toFixed(1) + " ms · " + Math.round(d[1] / 738.3 * 100) + "%");
+    });
+  })();
+})();
+</script>

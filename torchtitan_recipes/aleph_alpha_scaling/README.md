@@ -7,7 +7,8 @@ find out what limits tokens/sec per GPU. Qwen3-1.7B on 1x H100 first, then
 8 GPUs and Qwen3-30B-A3B.
 
 **Results and reasoning live in [LOG.md](LOG.md)**: per-phase numbers,
-predictions vs outcomes, and where to look in each trace.
+predictions vs outcomes, and where to look in each trace. [study.html](study.html)
+is the same story as a visual page with charts (open it in a browser).
 
 ## Files
 

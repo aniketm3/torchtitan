@@ -1,0 +1,5 @@
+# Per-run resolved configs (~1 MB each) are reproducible from the config name.
+*.config.txt
+# Sweep coordination markers.
+DONE
+COPIED

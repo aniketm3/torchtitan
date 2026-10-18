@@ -24,15 +24,18 @@ DENSE="
 "
 # 30B-A3B on 4x H200: FSDP=4 leaves ~14 GiB/GPU for activations, so full AC
 # at small batch. LBS 1 vs the largest LBS that fits shows comm- vs compute-bound.
+# EP's all-to-all syncs with the CPU, which CUDA graphs forbid, so EP runs and
+# their no-EP comparison both turn graphs off (_nograph).
 MOE="
-4 aa_30b_a3b_full_lbs1_fsdp4_dp1_log10           fit
-4 aa_30b_a3b_full_lbs2_fsdp4_dp1_log10           sweep
-4 aa_30b_a3b_full_lbs4_fsdp4_dp1_log10           sweep
-4 aa_30b_a3b_default_lbs1_fsdp4_dp1_log10        sweep
-4 aa_30b_a3b_full_lbs2_fsdp4_dp1_ep4_log10       ep
-4 aa_30b_a3b_full_lbs1_fsdp4_dp1_log10_prof      lbs1
-4 aa_30b_a3b_full_lbs2_fsdp4_dp1_log10_prof      noep
-4 aa_30b_a3b_full_lbs2_fsdp4_dp1_ep4_log10_prof  ep
+4 aa_30b_a3b_full_lbs1_fsdp4_dp1_log10                  fit
+4 aa_30b_a3b_full_lbs2_fsdp4_dp1_log10                  sweep
+4 aa_30b_a3b_full_lbs4_fsdp4_dp1_log10                  sweep
+4 aa_30b_a3b_default_lbs1_fsdp4_dp1_log10               sweep
+4 aa_30b_a3b_full_lbs2_fsdp4_dp1_nograph_log10          noep
+4 aa_30b_a3b_full_lbs2_fsdp4_dp1_ep4_nograph_log10      ep
+4 aa_30b_a3b_full_lbs1_fsdp4_dp1_log10_prof             lbs1
+4 aa_30b_a3b_full_lbs2_fsdp4_dp1_nograph_log10_prof     noep
+4 aa_30b_a3b_full_lbs2_fsdp4_dp1_ep4_nograph_log10_prof ep
 "
 case $SECTION in
     dense) RUNS=$DENSE ;;

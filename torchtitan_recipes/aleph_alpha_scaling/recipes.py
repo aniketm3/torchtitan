@@ -12,7 +12,7 @@ loader selects it without extra flags:
     MODULE=torchtitan_recipes.aleph_alpha_scaling.recipes \\
     CONFIG=aa_1p7b_selective_lbs8_fsdp1_dp1 NGPU=1 ./run_train.sh
 
-Name format: ``aa_{model}_{ac}_lbs{LBS}_fsdp{FSDP}_dp{DP}[_ep{N}][_eager][_log10][_prof]``
+Name format: ``aa_{model}_{ac}_lbs{LBS}_fsdp{FSDP}_dp{DP}[_ep{N}][_eager][_nograph][_log10][_prof]``
 
 Optional suffixes, one change each:
 - ``_ep{N}``   -- (MoE only) expert parallelism over N GPUs: each GPU owns
@@ -21,6 +21,11 @@ Optional suffixes, one change each:
 - ``_eager``   -- turn off torch.compile. By default Qwen3 compiles a few small
                   regions (loss, SwiGLU activation, RoPE, fp32->bf16 split);
                   matmuls and attention are separate kernels either way.
+- ``_nograph`` -- turn off CUDA graphs. By default torchtitan records the whole
+                  forward/backward once and replays it, which removes most CPU
+                  launch overhead. A graph cannot contain a CPU sync, and EP's
+                  all-to-all syncs to learn how many tokens each GPU receives,
+                  so EP runs need this.
 - ``_log10``   -- log metrics every 10 steps instead of every step. Logging calls
                   ``.item()``, which syncs CPU and GPU; per-step logging leaves
                   the GPU idle while the CPU prepares the next batch.
@@ -81,7 +86,7 @@ MODELS = {
 
 _CONFIG_NAME_RE = re.compile(
     r"aa_(1p7b|30b_a3b)_(none|selective|full|default)_lbs(\d+)_fsdp(\d+)_dp(\d+)"
-    r"(?:_ep(\d+))?(_eager)?(_log10)?(_prof)?"
+    r"(?:_ep(\d+))?(_eager)?(_nograph)?(_log10)?(_prof)?"
 )
 
 
@@ -108,6 +113,7 @@ def build_sweep_config(
     dp: int,
     ep: int = 1,
     eager: bool = False,
+    cuda_graphs: bool = True,
     log_freq: int = 1,
     profile: bool = False,
 ) -> Trainer.Config:
@@ -149,6 +155,7 @@ def build_sweep_config(
             num_tokens_per_microbatch_per_dp_rank=num_tokens_per_microbatch_per_dp_rank,
             max_context_length=SEQ_LEN,
             steps=NUM_STEPS,
+            disable_cuda_graphs=not cuda_graphs,
         ),
         # TensorBoard records per-step data-loading time, which the console omits.
         metrics=MetricsProcessor.Config(log_freq=log_freq, enable_tensorboard=True),
@@ -171,7 +178,7 @@ def __getattr__(name: str):
     match = _CONFIG_NAME_RE.fullmatch(name)
     if match is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    model, ac, lbs, fsdp, dp, ep, eager_suffix, log10_suffix, prof_suffix = (
+    model, ac, lbs, fsdp, dp, ep, eager_suffix, nograph_suffix, log10_suffix, prof_suffix = (
         match.groups()
     )
 
@@ -184,6 +191,7 @@ def __getattr__(name: str):
             dp=int(dp),
             ep=int(ep) if ep is not None else 1,
             eager=eager_suffix is not None,
+            cuda_graphs=nograph_suffix is None,
             log_freq=10 if log10_suffix is not None else 1,
             profile=prof_suffix is not None,
         )

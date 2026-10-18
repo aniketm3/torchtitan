@@ -12,9 +12,12 @@ loader selects it without extra flags:
     MODULE=torchtitan_recipes.aleph_alpha_scaling.recipes \\
     CONFIG=aa_1p7b_selective_lbs8_fsdp1_dp1 NGPU=1 ./run_train.sh
 
-Name format: ``aa_{model}_{ac}_lbs{LBS}_fsdp{FSDP}_dp{DP}[_eager][_log10][_prof]``
+Name format: ``aa_{model}_{ac}_lbs{LBS}_fsdp{FSDP}_dp{DP}[_ep8][_eager][_log10][_prof]``
 
 Optional suffixes, one change each:
+- ``_ep8``     -- (MoE only) expert parallelism over 8 GPUs: each GPU owns 16 of
+                  the 128 experts, and tokens travel to their experts' GPU via
+                  all-to-all. EP borrows its ranks from FSDP, so it needs fsdp=8.
 - ``_eager``   -- turn off torch.compile. By default Qwen3 compiles a few small
                   regions (loss, SwiGLU activation, RoPE, fp32->bf16 split);
                   matmuls and attention are separate kernels either way.
@@ -78,7 +81,7 @@ MODELS = {
 
 _CONFIG_NAME_RE = re.compile(
     r"aa_(1p7b|30b_a3b)_(none|selective|full|default)_lbs(\d+)_fsdp(\d+)_dp(\d+)"
-    r"(_eager)?(_log10)?(_prof)?"
+    r"(_ep8)?(_eager)?(_log10)?(_prof)?"
 )
 
 
@@ -103,6 +106,7 @@ def build_sweep_config(
     local_batch_size: int,
     fsdp: int,
     dp: int,
+    ep: int = 1,
     eager: bool = False,
     log_freq: int = 1,
     profile: bool = False,
@@ -112,6 +116,7 @@ def build_sweep_config(
     parallelism = ParallelismConfig(
         data_parallel_shard_degree=fsdp,
         data_parallel_replicate_degree=dp,
+        expert_parallel_degree=ep,
         tensor_parallel_degree=1,
         context_parallel_degree=1,
         pipeline_parallel_degree=1,
@@ -166,7 +171,9 @@ def __getattr__(name: str):
     match = _CONFIG_NAME_RE.fullmatch(name)
     if match is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    model, ac, lbs, fsdp, dp, eager_suffix, log10_suffix, prof_suffix = match.groups()
+    model, ac, lbs, fsdp, dp, ep_suffix, eager_suffix, log10_suffix, prof_suffix = (
+        match.groups()
+    )
 
     def config_fn() -> Trainer.Config:
         return build_sweep_config(
@@ -175,6 +182,7 @@ def __getattr__(name: str):
             local_batch_size=int(lbs),
             fsdp=int(fsdp),
             dp=int(dp),
+            ep=8 if ep_suffix is not None else 1,
             eager=eager_suffix is not None,
             log_freq=10 if log10_suffix is not None else 1,
             profile=prof_suffix is not None,

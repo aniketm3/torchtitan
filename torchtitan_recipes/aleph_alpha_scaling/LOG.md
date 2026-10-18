@@ -264,3 +264,56 @@ RMSNorm (77 ms) and eager elementwise ops (53 ms), by fusing or compiling them.
 A per-step `.item()` (logging, NaN checks, grad-norm prints) is a classic hidden
 sync. The fix is fewer syncs or async metrics, not a different parallelism.
 
+## Phase 3 plan (8 GPUs, one node), not run yet
+Script: `phase3.sh dense` then `phase3.sh moe`. Every run uses `_log10`.
+Hardware: **8x H200** (141 GB) recommended over 8x H100 (80 GB). For the 30B,
+FSDP=8 leaves ~10 GiB/GPU for activations on H100 (full-AC only, LBS 1-2) vs
+~71 GiB on H200 (a real AC x LBS sweep, closer to the trial's 288 GB B300s).
+H200 compute is the same as H100 (989 TFLOPS BF16), but HBM is faster.
+
+### Part A: Qwen3-1.7B dense (DDP vs FSDP vs HSDP, scaling 1 -> 8)
+| run | what it tests |
+|---|---|
+| 1 GPU, selective LBS 8 | same-node baseline for scaling efficiency |
+| DDP=8 (`fsdp1_dp8`) | full model copy per GPU; one gradient all-reduce per step |
+| FSDP=8 (`fsdp8_dp1`) | each GPU holds 1/8 of weights/grads/optimizer; all-gather weights per layer, reduce-scatter grads |
+| HSDP 4x2 (`fsdp4_dp2`) | shard within groups of 4, replicate across 2 groups (normally used for shard-in-node, replicate-across-nodes) |
+| FSDP=8, selective LBS 12 / 16, none LBS 8 | spend the memory FSDP frees |
+| profiles: DDP=8 and FSDP=8 at LBS 8 | see communication kernels overlap compute |
+
+Predictions:
+- **Scaling efficiency (TPS/GPU at 8 / at 1) ~97-99% for both DDP and FSDP.**
+  FSDP moves ~27 ms of data per step over NVLink vs ~740 ms of compute, and it
+  runs on a separate stream overlapped with compute.
+- **FSDP=8 frees ~22 GiB/GPU** (static 25.6 -> 3.2 GiB), so selective LBS 16 or
+  no-AC LBS 8 should fit. They may beat the 1-GPU TPS/GPU slightly.
+- HSDP ~= FSDP here. It only matters when part of the network is slow (across nodes).
+
+### Part B: Qwen3-30B-A3B MoE (30.5B total, 3.0B active per token)
+FLOPs/token = 27.9 G (6 x 3.04B active + attention) -> 40% MFU = 14.2k tok/s/GPU.
+
+| run | what it tests |
+|---|---|
+| full-AC LBS 1 | does it fit; first number |
+| full LBS 4/8, default LBS 2/4, selective LBS 2/4 | AC x LBS for an MoE |
+| default LBS 4 + EP=8 | expert parallelism: each GPU keeps 16 experts; tokens move via all-to-all |
+| profiles: default LBS 4 with and without EP | where MoE time goes |
+
+**The key prediction: at small batch the MoE is communication-bound under FSDP.**
+FSDP must gather ALL 30.5B params each step (0.24 s all-gather + 0.24 s
+reduce-scatter at ~450 GB/s), but each token only computes with 3B of them:
+
+| LBS | compute (40% MFU) | FSDP comm |
+|---|---|---|
+| 1 | 0.29 s | 0.47 s  <- comm-bound |
+| 2 | 0.58 s | 0.47 s |
+| 4 | 1.16 s | 0.47 s  <- hidden by overlap |
+| 8 | 2.31 s | 0.47 s |
+
+So batch size matters more for MoE than for dense. EP changes what moves: expert
+weights stay put (no all-gather for 96% of the params), and token activations
+move instead (all-to-all). That's the standard Megatron MoE trade-off.
+Also expect lower MFU than dense: per-expert GEMMs are small (each expert sees
+~256 x LBS tokens), and routing/permutation adds non-matmul work.
+
+Cost: ~55-60 min total (setup ~10, dense ~15, MoE ~30) x $42.32/hr = ~$40-45.

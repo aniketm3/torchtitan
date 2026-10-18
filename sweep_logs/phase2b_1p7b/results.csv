@@ -1,0 +1,7 @@
+model,ac,lbs,fsdp,dp,variant,num_steps,num_avg_steps,tps,mfu,mem_pct,alloc_retries
+1p7b,full,8,1,1,log10__rep1,5,3,35857.666666666664,47.64666666666667,46.36,False
+1p7b,full,24,1,1,log10__rep1,5,3,37036.333333333336,49.21333333333333,64.33,False
+1p7b,selective,8,1,1,log10__rep1,5,3,42268.333333333336,56.166666666666664,90.96,False
+1p7b,selective,8,1,1,log10__rep2,5,3,42346.0,56.27,90.96,False
+1p7b,selective,8,1,1,log10_prof__fixed,5,3,41661.0,55.35999999999999,90.96,False
+1p7b,selective,8,1,1,rep1,40,30,30577.1,40.63166666666667,90.96,False

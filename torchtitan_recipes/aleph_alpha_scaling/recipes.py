@@ -12,7 +12,17 @@ loader selects it without extra flags:
     MODULE=torchtitan_recipes.aleph_alpha_scaling.recipes \\
     CONFIG=aa_1p7b_selective_lbs8_fsdp1_dp1 NGPU=1 ./run_train.sh
 
-Name format: ``aa_{model}_{ac}_lbs{LBS}_fsdp{FSDP}_dp{DP}``
+Name format: ``aa_{model}_{ac}_lbs{LBS}_fsdp{FSDP}_dp{DP}[_eager][_log10][_prof]``
+
+Optional suffixes, one change each:
+- ``_eager``   -- turn off torch.compile. By default Qwen3 compiles a few small
+                  regions (loss, SwiGLU activation, RoPE, fp32->bf16 split);
+                  matmuls and attention are separate kernels either way.
+- ``_log10``   -- log metrics every 10 steps instead of every step. Logging calls
+                  ``.item()``, which syncs CPU and GPU; per-step logging leaves
+                  the GPU idle while the CPU prepares the next batch.
+- ``_prof``    -- capture a PyTorch profiler trace of steps 19-20 and a CUDA
+                  memory snapshot after step 5.
 
 model:
 - ``1p7b``     -- Qwen3 1.7B dense (1.72B params; embedding and LM head are tied)
@@ -52,6 +62,7 @@ from torchtitan.distributed.activation_remat import (
 from torchtitan.models.common.config_utils import decoder_vocab_size
 from torchtitan.models.qwen3 import build_model_config
 from torchtitan.observability.metrics import MetricsProcessor
+from torchtitan.observability.profiler import Profiler
 from torchtitan.trainer import Trainer
 
 from torchtitan_recipes.data import c4_document_capacity
@@ -67,6 +78,7 @@ MODELS = {
 
 _CONFIG_NAME_RE = re.compile(
     r"aa_(1p7b|30b_a3b)_(none|selective|full|default)_lbs(\d+)_fsdp(\d+)_dp(\d+)"
+    r"(_eager)?(_log10)?(_prof)?"
 )
 
 
@@ -91,6 +103,9 @@ def build_sweep_config(
     local_batch_size: int,
     fsdp: int,
     dp: int,
+    eager: bool = False,
+    log_freq: int = 1,
+    profile: bool = False,
 ) -> Trainer.Config:
     """Build the config for one sweep point."""
     flavor, hf_assets_path = MODELS[model]
@@ -102,6 +117,8 @@ def build_sweep_config(
         pipeline_parallel_degree=1,
     )
     model_config = build_model_config(flavor, seq_len=SEQ_LEN, parallelism=parallelism)
+    if eager:
+        model_config.local_compile_regions = []
     num_tokens_per_microbatch_per_dp_rank = local_batch_size * SEQ_LEN
     return Trainer.Config(
         loss=ChunkedLossWrapper.Config(
@@ -128,7 +145,17 @@ def build_sweep_config(
             max_context_length=SEQ_LEN,
             steps=NUM_STEPS,
         ),
-        metrics=MetricsProcessor.Config(log_freq=1),
+        # TensorBoard records per-step data-loading time, which the console omits.
+        metrics=MetricsProcessor.Config(log_freq=log_freq, enable_tensorboard=True),
+        profiler=Profiler.Config(
+            enable_profiling=profile,
+            profile_freq=20,
+            profiler_warmup=3,
+            profiler_active=2,
+            profiler_repeat=1,
+            enable_memory_snapshot=profile,
+            memory_snapshot_freq=5,
+        ),
         parallelism=parallelism,
         checkpointer=None,
         activation_remat=_activation_remat(ac),
@@ -139,7 +166,7 @@ def __getattr__(name: str):
     match = _CONFIG_NAME_RE.fullmatch(name)
     if match is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    model, ac, lbs, fsdp, dp = match.groups()
+    model, ac, lbs, fsdp, dp, eager_suffix, log10_suffix, prof_suffix = match.groups()
 
     def config_fn() -> Trainer.Config:
         return build_sweep_config(
@@ -148,6 +175,9 @@ def __getattr__(name: str):
             local_batch_size=int(lbs),
             fsdp=int(fsdp),
             dp=int(dp),
+            eager=eager_suffix is not None,
+            log_freq=10 if log10_suffix is not None else 1,
+            profile=prof_suffix is not None,
         )
 
     config_fn.__name__ = name

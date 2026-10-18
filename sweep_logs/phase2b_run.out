@@ -1,0 +1,25 @@
+[run ] aa_1p7b_selective_lbs8_fsdp1_dp1__rep1
+[run ] aa_1p7b_selective_lbs8_fsdp1_dp1_log10__rep1
+[run ] aa_1p7b_selective_lbs8_fsdp1_dp1_log10__rep2
+[run ] aa_1p7b_full_lbs8_fsdp1_dp1_log10__rep1
+[run ] aa_1p7b_full_lbs24_fsdp1_dp1_log10__rep1
+[run ] aa_1p7b_selective_lbs8_fsdp1_dp1_log10_prof__fixed
+AC          LBS  FSDP/DP  steps   TPS/GPU   MFU%   mem%  retries  variant
+-------------------------------------------------------------------------
+full          8     1/1       5    35,858   47.6   46.4           log10__rep1
+full         24     1/1       5    37,036   49.2   64.3           log10__rep1
+selective     8     1/1       5    42,268   56.2   91.0           log10__rep1
+selective     8     1/1       5    42,346   56.3   91.0           log10__rep2
+selective     8     1/1       5    41,661   55.4   91.0           log10_prof__fixed
+selective     8     1/1      40    30,577   40.6   91.0           rep1
+
+Best: selective LBS=8 -> 42,346 TPS/GPU, 56.3% MFU, 91% mem
+Blog (16x B200): selective LBS=18 -> 28.4k TPS/GPU, 37.5% MFU, 92% mem
+run                                                       data%   step_s
+aa_1p7b_full_lbs24_fsdp1_dp1_log10__rep1                   1.39    2.654
+aa_1p7b_full_lbs8_fsdp1_dp1_log10__rep1                    2.15    0.914
+aa_1p7b_selective_lbs8_fsdp1_dp1__rep1                     2.04    1.073
+aa_1p7b_selective_lbs8_fsdp1_dp1_log10__rep1               1.70    0.775
+aa_1p7b_selective_lbs8_fsdp1_dp1_log10__rep2               5.33    0.774
+aa_1p7b_selective_lbs8_fsdp1_dp1_log10_prof__fixed         3.89    0.787
+Waiting for sweep_logs/phase2b_1p7b/COPIED before stopping pod mf35in367j6ugy

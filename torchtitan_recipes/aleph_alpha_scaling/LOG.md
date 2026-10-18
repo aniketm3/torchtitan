@@ -154,3 +154,113 @@ The profile of full vs selective at LBS 8 should show it.
   fitting (selective 8 = 91%) straight to OOM (10). Selective LBS 9 is the run
   that could show the retry regime.
 
+## Phase 2: diagnose beyond the knobs (1x H100)
+
+Run 2026-10-18 on pod `wu6vmrnauk85ed` (~15 min). Logs: `sweep_logs/phase2_1p7b/`;
+TensorBoard, traces and memory snapshots: `outputs/phase2/<run>/`.
+Trace numbers come from `trace_summary.py`.
+
+### Ablations (one change each from selective LBS 8)
+| run | TPS | MFU | mem | data-wait % | note |
+|---|---|---|---|---|---|
+| baseline rep1 / rep2 / rep3 | 33,827 / 32,282 / 31,888 | 42-45% | 91.0% | 3.3 / 1.1 / 2.2 | mean 32.7k, spread +-3% |
+| baseline (profiled) | 32,066 | 42.6% | 91.0% | 1.3 | |
+| eager (compile off) rep1 / rep2 | 24,588 / 25,026 | 33% | 98.1% | 2.4 / 1.5 | **-24% TPS, +7 pts memory** |
+| LBS 9 | 31,050 | 41.3% | 97.2% | 2.6 | -5% vs LBS 8, no retries logged |
+| full-AC LBS 8 (profiled) | 28,727 | 38.2% | 46.4% | 4.1 | -12% |
+| selective LBS 1 (profiled, "worst") | 19,491 | 25.9% | 45.9% | 1.0 | |
+
+- **Noise:** identical runs spread +-3% on one machine. Yesterday's Phase 1 machine
+  ran the same config at 31.2k, 5% below today's mean. Compare only within a
+  session, and treat <5% differences as noise.
+- **Compile is worth +31%** (25k -> 32.7k), and saves 7 points of memory. The
+  compiled regions fuse chains of elementwise ops (loss, SwiGLU, RoPE) into
+  single kernels that don't write intermediates to HBM. Eager does more memory
+  round-trips (slower) and keeps more intermediate tensors (more memory).
+- **Data:** the dataloader wait is 1-4% of the step. Not the bottleneck by
+  that metric, but see the trace: CPU-side batch handling is.
+- **LBS 9 (97% memory) is slower than LBS 8 (91%)** even though it moves 12.5%
+  more tokens per step. That reproduces the blog's "degrades near full memory",
+  but without logged allocation retries. Per-step TPS dropped from ~31k to
+  ~25k over steps 31-40. Mechanism not yet confirmed (no profile of LBS 9).
+
+### Trace: where the step goes (selective LBS 8, step 19)
+GPU step 902 ms, GPU busy 80.8% (step 18: 70.7%). Kernel time 730 ms:
+matmul 428 (59%), RMSNorm 76 (10.5%), compiled Triton 68 (9.3%), eager
+elementwise 53 (7.3%), attention 49 (6.8%), other 31, optimizer 24.
+
+**The idle ~20-30% is almost all ONE gap of ~151 ms at the start of each
+step.** What happens:
+1. End of step 18: the CPU calls `aten::item` -> `cudaStreamSynchronize` and
+   blocks for 684 ms until the GPU finishes all queued work. This is the
+   metrics logging (`loss.item()`, `grad_norm.item()`, trainer.py ~450-462),
+   which runs only on logging steps. I set `log_freq=1`, so **every step syncs.**
+2. Step 19 starts with the GPU drained. The CPU then spends ~150 ms on batch
+   handling before the first kernel launches: `aten::view` 56 ms, `aten::to`
+   (host->device copy) 43 ms, `aten::reshape` 42 ms. A view should take
+   microseconds, so the main thread is likely blocked by the GIL (grain
+   dataloader threads). Not confirmed; the trace only records the main thread.
+3. The GPU idles for that whole time.
+
+**Classification: host/CPU-bound at step boundaries, caused by a per-step sync
+in the measurement harness.** Without the sync, the CPU would prepare batch N+1
+while the GPU still runs step N.
+
+Upper bound if the gap vanished: ~730 ms of kernels for 32,768 tokens = ~45k
+tok/s (~59% MFU). The rest of the headroom is non-matmul kernels (41% of GPU
+time).
+
+**The open question from Phase 1 is answered.** full-AC LBS 8 matmul time is
+553 ms vs 428 ms for selective: +29%, exactly the predicted extra FLOPs. Total
+kernel time is +19%. But end-to-end TPS was only -10 to -12%, because each step
+also carries the ~150 ms fixed idle gap, which dilutes any GPU-side
+difference. **The idle gap made the AC modes look closer than they are.**
+
+**Worst config (selective LBS 1):** GPU step 165-219 ms, kernel time 154 ms.
+The optimizer (23.5 ms, a fixed cost per step) is 15% of kernel time, vs 3% at
+LBS 8. Matmuls are only 38%. With few tokens per step, fixed per-step costs
+(optimizer, launches, the sync) dominate. That's why small batches have low MFU.
+
+### Fixes to try
+1. `log_freq=10`: one sync per 10 steps, so the CPU can run ahead.
+   Prediction: GPU busy -> 95%+, TPS +15-25% at LBS 8.
+2. Re-run selective vs full-AC with fix 1: the full-AC penalty should grow
+   toward the +19% kernel-time gap, since the idle time no longer hides it.
+
+### Phase 2b: fix 1, log every 10 steps (2026-10-18, pod `mf35in367j6ugy`, ~31 min, ~$2)
+All on one machine; baseline = the same config with per-step logging.
+
+| run | TPS | MFU | step time | mem |
+|---|---|---|---|---|
+| selective LBS 8, log every step (baseline) | 30,577 | 40.6% | 1.073 s | 91% |
+| **selective LBS 8, log every 10** rep1 / rep2 | **42,268 / 42,346** | **56.3%** | **0.775 s** | 91% |
+| selective LBS 8, log every 10, profiled | 41,661 | 55.4% | 0.787 s | 91% |
+| full-AC LBS 8, log every 10 | 35,858 | 47.6% | 0.914 s | 46% |
+| full-AC LBS 24, log every 10 | 37,036 | 49.2% | 2.654 s | 64% |
+
+(With log_freq 10, TPS is the mean of the step 20/30/40 log windows. Each is a
+10-step average.)
+
+- **+38% TPS** from removing the per-step sync (predicted +15-25%).
+- **Trace confirms it** (`outputs/phase2b/..._log10_prof__fixed`): GPU busy 98.8%
+  (was 71-81%); idle gaps 6 ms per step (was 170-300 ms). The GPU step is now
+  730-750 ms, the same as the kernel time. The run is now **GPU-bound**.
+- **Selective vs full-AC, now resolved:** full is -15% at LBS 8 and -12% at
+  LBS 24, outside the +-3% noise. With the idle gap gone, the recompute cost shows
+  (the kernel-time gap was +19%). **Selective wins, confirmed.** Full-AC's best
+  batch (24) still can't make up the recompute.
+- **Phase 1's absolute numbers were all depressed** by the sync. The gap was a
+  roughly fixed time per step, so it hurt short steps (small LBS) most. Rankings
+  and the "peak near full memory" shape should be re-checked with log_freq 10.
+
+**Classification after fix 1:** GPU compute-bound. Of 735 ms of kernels per step:
+matmul 59% (running at ~776 TFLOPS = **78% of H100 peak** while they run), RMSNorm
+10.5% (an unfused eager layer_norm kernel, fwd + bwd), compiled Triton 9.4%,
+eager elementwise 7.3%, attention 6.5%, other 4%, optimizer 1-3%.
+Remaining headroom is in the ~40% of GPU time that isn't matmul. Next targets:
+RMSNorm (77 ms) and eager elementwise ops (53 ms), by fusing or compiling them.
+
+**Interview takeaway:** before tuning anything, check the GPU is actually busy.
+A per-step `.item()` (logging, NaN checks, grad-norm prints) is a classic hidden
+sync. The fix is fewer syncs or async metrics, not a different parallelism.
+

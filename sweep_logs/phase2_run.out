@@ -1,0 +1,34 @@
+[run ] aa_1p7b_selective_lbs8_fsdp1_dp1__rep1
+[run ] aa_1p7b_selective_lbs8_fsdp1_dp1__rep2
+[run ] aa_1p7b_selective_lbs8_fsdp1_dp1__rep3
+[run ] aa_1p7b_selective_lbs8_fsdp1_dp1_eager__rep1
+[run ] aa_1p7b_selective_lbs8_fsdp1_dp1_eager__rep2
+[run ] aa_1p7b_selective_lbs9_fsdp1_dp1__rep1
+[run ] aa_1p7b_selective_lbs8_fsdp1_dp1_prof__best
+[run ] aa_1p7b_selective_lbs1_fsdp1_dp1_prof__worst
+[run ] aa_1p7b_full_lbs8_fsdp1_dp1_prof__fullac
+AC          LBS  FSDP/DP  steps   TPS/GPU   MFU%   mem%  retries  variant
+-------------------------------------------------------------------------
+full          8     1/1      40    28,727   38.2   46.4           prof__fullac
+selective     1     1/1      40    19,491   25.9   45.9           prof__worst
+selective     8     1/1      40    24,588   32.7   98.1           eager__rep1
+selective     8     1/1      40    25,026   33.3   98.1           eager__rep2
+selective     8     1/1      40    32,066   42.6   91.0           prof__best
+selective     8     1/1      40    33,827   44.9   91.0           rep1
+selective     8     1/1      40    32,282   42.9   91.0           rep2
+selective     8     1/1      40    31,888   42.4   91.0           rep3
+selective     9     1/1      40    31,050   41.3   97.2           rep1
+
+Best: selective LBS=8 -> 33,827 TPS/GPU, 44.9% MFU, 91% mem
+Blog (16x B200): selective LBS=18 -> 28.4k TPS/GPU, 37.5% MFU, 92% mem
+run                                                       data%   step_s
+aa_1p7b_full_lbs8_fsdp1_dp1_prof__fullac                   4.07    1.145
+aa_1p7b_selective_lbs1_fsdp1_dp1_prof__worst               1.03    0.213
+aa_1p7b_selective_lbs8_fsdp1_dp1__rep1                     3.33    0.974
+aa_1p7b_selective_lbs8_fsdp1_dp1__rep2                     1.08    1.019
+aa_1p7b_selective_lbs8_fsdp1_dp1__rep3                     2.20    1.031
+aa_1p7b_selective_lbs8_fsdp1_dp1_eager__rep1               2.39    1.335
+aa_1p7b_selective_lbs8_fsdp1_dp1_eager__rep2               1.48    1.314
+aa_1p7b_selective_lbs8_fsdp1_dp1_prof__best                1.31    1.025
+aa_1p7b_selective_lbs9_fsdp1_dp1__rep1                     2.59    1.208
+Waiting for sweep_logs/phase2_1p7b/COPIED before stopping pod wu6vmrnauk85ed
